@@ -16,10 +16,22 @@ export default function AppShell({ role, children }: { role: Role; children: Rea
   const router = useRouter();
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const roleLabel = ({ admin: 'Admin', staff: 'Staf', customer: 'Pelanggan' })[role];
+  const pageLabel = links.find(([href]) => href === path)?.[1] ?? 'Ruang kerja';
   async function logout() {
     setBusy(true); setError('');
     try { await api('auth/logout', 'POST', {}); router.push('/login'); router.refresh(); }
     catch (error) { setError((error as Error).message); setBusy(false); }
   }
-  return <div className="app"><a className="skip" href="#content">Lewati navigasi</a><aside className="rail"><Link href="/dashboard" className="brand">Booking B2B</Link><p className="role">{({ admin: 'Admin', staff: 'Staf', customer: 'Pelanggan' })[role]}</p><nav aria-label="Navigasi utama">{links.filter(([href]) => role === 'admin' || !['/services', '/team'].includes(href)).map(([href, label, drawing]) => <Link key={href} href={href} aria-current={path === href ? 'page' : undefined}><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7"><path d={drawing} /></svg>{label}</Link>)}</nav><button className="logout" disabled={busy} onClick={logout}>{busy ? 'Keluar…' : 'Keluar'}</button><Feedback error={error} /></aside><main id="content" className="workspace">{children}</main></div>;
+  return <div className="app">
+    <a className="skip" href="#content">Lewati navigasi</a>
+    <aside className="rail">
+      <Link href="/dashboard" className="brand"><span className="brand-mark"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7"><path d="M5 5h14v16H5z M8 2v6 M16 2v6 M5 11h14 M9 15l2 2 4-4" /></svg></span><span>Booking <span className="brand-light">B2B</span></span></Link>
+      <div className="rail-workspace"><span className="workspace-symbol" aria-hidden="true">B</span><div><strong>Ruang kerja bisnis</strong><span>Pengelolaan jadwal</span></div></div>
+      <p className="nav-caption">MENU UTAMA</p>
+      <nav aria-label="Navigasi utama">{links.filter(([href]) => role === 'admin' || !['/services', '/team'].includes(href)).map(([href, label, drawing]) => <Link key={href} href={href} aria-current={path === href ? 'page' : undefined}><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7"><path d={drawing} /></svg>{label}</Link>)}</nav>
+      <div className="rail-bottom"><div className="rail-note"><span className="eyebrow">LEBIH TERATUR, LEBIH TENANG</span><p>Satu tempat untuk jadwal dan layanan Anda.</p></div><div className="rail-account"><span className="avatar" aria-hidden="true">{roleLabel[0]}</span><div><strong>{roleLabel}</strong><span>Akun Anda</span></div></div><button className="logout" disabled={busy} onClick={logout}><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7"><path d="M9 4H4v16h5 M13 8l4 4-4 4 M8 12h13" /></svg>{busy ? 'Keluar…' : 'Keluar'}</button><Feedback error={error} /></div>
+    </aside>
+    <div className="main-area"><header className="topbar"><div className="breadcrumb">Ruang kerja <span aria-hidden="true">/</span> <strong>{pageLabel}</strong></div><div className="topbar-account"><span className="account-role">{roleLabel}</span><span className="avatar" aria-hidden="true">{roleLabel[0]}</span></div></header><main id="content" className="workspace">{children}<footer className="workspace-footer"><span>Booking B2B</span><span>Jadwal tertata. Layanan terjaga.</span></footer></main></div>
+  </div>;
 }
