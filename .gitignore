@@ -1,0 +1,20 @@
+node_modules/
+.next/
+.env
+.env.*
+!.env.example
+*.tsbuildinfo
+coverage/
+test-results/
+playwright-report/
+# AI / Agent harnesses
+.agents/
+.codex/
+.impeccable/
+.superpowers/
+AGENTS.md
+CLAUDE.md
+GEMINI.md
+__pycache__/
+*.pyc
+*.log

@@ -1,0 +1,127 @@
+import { expect, test, type Page, type Route } from '@playwright/test';
+const harness = 'http://127.0.0.1:4173/tests/e2e/harness.html';
+const a = '11111111-1111-4111-8111-111111111111';
+const b = '22222222-2222-4222-8222-222222222222';
+const staff = '33333333-3333-4333-8333-333333333333';
+const slot = { start: '2030-11-01T23:00:00.000Z', end: '2030-11-01T23:30:00.000Z' };
+async function setup(page: Page) {
+  await page.route('**/api/business', r => r.fulfill({ json: { name: 'Fixture', timezone: 'Asia/Jakarta' } }));
+  await page.route('**/api/services', r => r.fulfill({ json: [{ id: a, name: 'Layanan panjang '.repeat(8), price: 75000, durationMinutes: 30, active: true }, { id: b, name: 'Layanan B', price: 50000, durationMinutes: 30, active: true }] }));
+  await page.route('**/api/staff*', r => r.fulfill({ json: [{ id: staff, name: 'Staf A', active: true, serviceIds: [a] }] }));
+  await page.route('**/api/appointments?*', r => r.fulfill({ json: { items: [], nextOffset: null } }));
+  await page.route('**/api/availability?*', r => r.fulfill({ json: [slot] }));
+}
+async function criteria(page: Page) {
+  await page.getByRole('combobox', { name: 'Layanan', exact: true }).selectOption(a);
+  await page.getByRole('combobox', { name: 'Staf', exact: true }).selectOption(staff);
+  await page.getByLabel('Tanggal', { exact: true }).fill('2030-11-02');
+}
+test('HTTP mocks: resource key changes hide old staff and retry announces loading', async ({ page }) => {
+  await setup(page); await page.goto(harness); await criteria(page);
+  let held: Route | undefined;
+  await page.route(`**/api/staff?serviceId=${b}`, r => { held = r; });
+  await page.getByRole('combobox', { name: 'Layanan', exact: true }).selectOption(b);
+  await expect(page.getByRole('combobox', { name: 'Staf', exact: true })).toBeDisabled();
+  await expect(page.getByRole('combobox', { name: 'Staf', exact: true }).locator('option', { hasText: 'Staf A' })).toHaveCount(0);
+  await expect.poll(() => !!held).toBe(true);
+  await held!.fulfill({ status: 500, json: { error: 'Gagal membaca staf' } });
+  await page.getByRole('button', { name: 'Coba lagi' }).click();
+  await expect(page.getByRole('combobox', { name: 'Staf', exact: true })).toBeDisabled();
+  await expect(page.getByRole('status').filter({ hasText: 'Memuat data' })).toBeVisible();
+  await expect.poll(() => !!held).toBe(true);
+  await held!.fulfill({ json: [] });
+});
+test('HTTP mocks: criteria changes invalidate held slots and failed refresh clears slots', async ({ page }) => {
+  await setup(page); await page.goto(harness); await criteria(page);
+  let held: Route | undefined;
+  await page.route('**/api/availability?*', r => { held = r; });
+  await page.getByRole('button', { name: 'Cari slot' }).click();
+  await expect.poll(() => !!held).toBe(true);
+  await page.getByLabel('Tanggal', { exact: true }).fill('2030-11-03');
+  await held!.fulfill({ json: [slot] });
+  await expect(page.getByRole('radio')).toHaveCount(0);
+  await page.unroute('**/api/availability?*');
+  await page.route('**/api/availability?*', r => r.fulfill({ json: [slot] }));
+  await page.getByRole('button', { name: 'Cari slot' }).click();
+  await expect(page.getByRole('radio')).toHaveCount(1);
+  await page.route('**/api/availability?*', r => r.fulfill({ status: 500, json: { error: 'Slot gagal dimuat' } }));
+  await page.getByRole('button', { name: 'Cari slot' }).click();
+  await expect(page.getByText('Slot gagal dimuat')).toBeVisible();
+  await expect(page.getByRole('radio')).toHaveCount(0);
+});
+test('HTTP mocks: business local midnight query includes 06:00 and date changes hide old actions', async ({ page }) => {
+  await setup(page);
+  await page.route('**/api/appointments?*', r => r.fulfill({ json: { items: [{ id: a, serviceName: 'Awal pagi', staffName: 'Staf', customerName: 'Nama', startsAt: '2030-11-01T23:00:00Z', endsAt: '2030-11-01T23:30:00Z', price: 1, durationMinutes: 30, status: 'confirmed', paymentStatus: null }], nextOffset: 100 } }));
+  await page.goto(harness);
+  const date = page.getByLabel('Mulai rentang (tanggal bisnis)');
+  const pending = page.waitForRequest(r => r.url().includes('/api/appointments?') && new URL(r.url()).searchParams.get('from') === '2030-11-01T17:00:00.000Z');
+  await date.fill('2030-11-02');
+  const request = await pending;
+  expect(new URL(request.url()).searchParams.get('to')).toBe('2030-12-01T17:00:00.000Z');
+  await expect(page.getByText(/06.00/).first()).toBeVisible();
+  let held: Route | undefined;
+  await page.route('**/api/appointments?*', r => { held = r; });
+  await page.getByRole('button', { name: 'Berikutnya' }).click();
+  await expect(page.getByRole('button', { name: 'Batalkan' })).toHaveCount(0);
+  await expect(page.getByRole('status').filter({ hasText: 'Memuat data' })).toBeVisible();
+  await expect.poll(() => !!held).toBe(true); await held!.fulfill({ json: { items: [], nextOffset: null } });
+  await expect(page.getByRole('heading', { name: 'Belum ada janji temu' })).toBeVisible();
+});
+test('HTTP mocks: ordinary staff edits preserve hidden assignments, replacement is explicit', async ({ page }) => {
+  await setup(page);
+  await page.route('**/api/working-hours?*', r => r.fulfill({ json: [] }));
+  await page.route('**/api/staff?includeInactive=true', r => r.fulfill({ json: [{ id: staff, name: 'Staf A', active: true, serviceIds: [a, b] }] }));
+  await page.route('**/api/services', r => r.fulfill({ json: [{ id: a, name: 'Layanan A', active: true, price: 1, durationMinutes: 30 }] }));
+  await page.goto(`${harness}?team`); await page.locator('summary').click();
+  await page.getByLabel('Nama staf').last().fill('Nama baru');
+  const saved = page.waitForRequest(r => r.method() === 'PATCH' && r.url().endsWith('/api/staff'));
+  await page.route('**/api/staff', r => r.fulfill({ json: {} }));
+  await page.getByRole('button', { name: 'Simpan staf & penugasan' }).click();
+  expect((await saved).postDataJSON()).not.toHaveProperty('serviceIds');
+  // Hide B as an inactive assignment; ordinary edits must still omit replacements.
+  await page.route('**/api/services', r => r.fulfill({ json: [{ id: a, name: 'Layanan A', active: true, price: 1, durationMinutes: 30 }] }));
+  await page.reload(); await page.locator('summary').click();
+  await page.getByLabel('Layanan A', { exact: true }).uncheck();
+  page.once('dialog', dialog => dialog.accept());
+  const replacement = page.waitForRequest(r => r.method() === 'PATCH' && r.url().endsWith('/api/staff'));
+  await page.getByRole('button', { name: 'Simpan staf & penugasan' }).click();
+  expect((await replacement).postDataJSON().serviceIds).toEqual([]);
+});
+test('HTTP mocks: conflict retains criteria and private mobile error/loading/empty states', async ({ page }) => {
+  await setup(page); await page.setViewportSize({ width: 375, height: 812 });
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.goto(harness); await criteria(page);
+  await page.getByRole('button', { name: 'Cari slot' }).click();
+  await page.getByRole('radio').check();
+  await page.route('**/api/appointments', r => r.fulfill({ status: 409, json: { error: 'Slot sudah dipesan' } }));
+  await page.getByRole('button', { name: 'Konfirmasi booking' }).click();
+  await expect(page.getByRole('alert')).toContainText('Slot sudah dipesan');
+  await expect(page.getByRole('combobox', { name: 'Layanan', exact: true })).toHaveValue(a);
+  await expect(page.getByLabel('Tanggal', { exact: true })).toHaveValue('2030-11-02');
+  await expect(page.getByRole('radio')).toBeChecked();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(375);
+  await page.screenshot({ path: 'test-results/screenshots/private-mock-conflict-375.png', fullPage: true });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.screenshot({ path: 'test-results/screenshots/private-mock-conflict-1440.png', fullPage: true });
+  await page.route('**/api/appointments?*', r => r.fulfill({ status: 500, json: { error: 'Jadwal gagal dimuat' } }));
+  await page.getByLabel('Mulai rentang (tanggal bisnis)').fill('2030-11-03');
+  await expect(page.getByRole('alert').filter({ hasText: 'Jadwal gagal dimuat' })).toBeVisible();
+  let held: Route | undefined;
+  await page.route('**/api/appointments?*', r => { held = r; });
+  await page.getByRole('button', { name: 'Coba lagi' }).click();
+  await expect(page.getByRole('status').filter({ hasText: 'Memuat data' })).toBeVisible();
+  await expect.poll(() => !!held).toBe(true);
+  await held!.fulfill({ json: { items: [], nextOffset: null } });
+  await expect(page.getByRole('heading', { name: 'Belum ada janji temu' })).toBeVisible();
+});
+test('HTTP mocks: staff gets completion only; server errors remain visible', async ({ page }) => {
+  await setup(page);
+  await page.route('**/api/appointments?*', r => r.fulfill({ json: { items: [{ id: a, serviceName: 'Milik staf', staffName: 'Staf', customerName: 'Nama', startsAt: '2030-11-01T23:00:00Z', endsAt: '2030-11-01T23:30:00Z', price: 1, durationMinutes: 30, status: 'confirmed', paymentStatus: null }], nextOffset: null } }));
+  await page.route(`**/api/appointments/${a}`, r => r.fulfill({ status: 403, json: { error: 'Akses ditolak' } }));
+  await page.goto(`${harness}?role=staff`);
+  await expect(page.getByRole('button', { name: 'Batalkan' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Bayar simulasi' })).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: 'Booking baru' })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Tandai selesai' }).click();
+  await expect(page.getByRole('alert')).toContainText('Akses ditolak');
+});
